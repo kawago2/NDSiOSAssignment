@@ -16,15 +16,27 @@ final class DigimonListViewModel: ObservableObject {
     @Published private(set) var hasMorePages = true
     @Published private(set) var errorMessage: String?
     @Published private(set) var paginationErrorMessage: String?
+    @Published private(set) var filterOptions: DigimonFilterOptions = .empty
     @Published var searchCriteria: DigimonSearchCriteria = .empty
 
     let pageSize = 8
 
     private let repository: DigimonRepository
     private var currentPage = 0
+    private var pendingItems: [DigimonSummary] = []
 
     init(repository: DigimonRepository) {
         self.repository = repository
+    }
+
+    func loadFilterOptionsIfNeeded() async {
+        guard filterOptions == .empty else { return }
+
+        do {
+            filterOptions = try await repository.fetchFilterOptions()
+        } catch {
+            // Filter options are optional for interaction. Keep manual input available.
+        }
     }
 
     func loadInitialIfNeeded() async {
@@ -37,8 +49,9 @@ final class DigimonListViewModel: ObservableObject {
         paginationErrorMessage = nil
         currentPage = 0
         hasMorePages = true
+        pendingItems = []
         items = []
-        await fetchPage(isInitial: true)
+        await fetchDisplayBatch(isInitial: true)
     }
 
     func applySearchCriteria(_ criteria: DigimonSearchCriteria) async {
@@ -52,7 +65,7 @@ final class DigimonListViewModel: ObservableObject {
         paginationErrorMessage = nil
 
         guard let currentItem else {
-            await fetchPage(isInitial: items.isEmpty)
+            await fetchDisplayBatch(isInitial: items.isEmpty)
             return
         }
 
@@ -60,7 +73,7 @@ final class DigimonListViewModel: ObservableObject {
         let thresholdIndex = max(items.count - 2, 0)
 
         if index >= thresholdIndex {
-            await fetchPage(isInitial: false)
+            await fetchDisplayBatch(isInitial: false)
         }
     }
 
@@ -68,7 +81,7 @@ final class DigimonListViewModel: ObservableObject {
         paginationErrorMessage = nil
     }
 
-    private func fetchPage(isInitial: Bool) async {
+    private func fetchDisplayBatch(isInitial: Bool) async {
         if isInitial {
             isLoadingInitial = true
         } else {
@@ -81,15 +94,30 @@ final class DigimonListViewModel: ObservableObject {
         }
 
         do {
-            let page = try await repository.fetchDigimonPage(
-                page: currentPage,
-                pageSize: pageSize,
-                criteria: searchCriteria
-            )
+            var batchPool: [DigimonSummary] = pendingItems
+            pendingItems = []
 
-            items.append(contentsOf: page.items)
-            currentPage += 1
-            hasMorePages = page.pageInfo.hasNextPage && !page.items.isEmpty
+            while batchPool.count < pageSize && hasMorePages {
+                let page = try await repository.fetchDigimonPage(
+                    page: currentPage,
+                    pageSize: pageSize,
+                    criteria: searchCriteria
+                )
+
+                currentPage += 1
+                hasMorePages = page.pageInfo.hasNextPage
+                batchPool.append(contentsOf: page.items)
+
+                if !page.pageInfo.hasNextPage {
+                    break
+                }
+            }
+
+            let nextBatch = Array(batchPool.prefix(pageSize))
+            pendingItems = Array(batchPool.dropFirst(nextBatch.count))
+            items.append(contentsOf: nextBatch)
+
+            hasMorePages = hasMorePages || !pendingItems.isEmpty
         } catch {
             let message = error.userFacingMessage(default: "Failed to load Digimon.")
             if isInitial {

@@ -17,6 +17,7 @@ struct AppRootView: View {
                 container: container
             )
                 .navigationTitle("Digimon")
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

@@ -9,10 +9,13 @@ import SwiftUI
 
 struct DigimonListView: View {
     @StateObject private var viewModel: DigimonListViewModel
-    @State private var isFilterExpanded = false
+    @State private var isFilterSheetPresented = false
+    @State private var isApplyingFilters = false
     @State private var nameFilter: String
+    @State private var exactFilter: Bool
     @State private var typeFilter: String
     @State private var attributeFilter: String
+    @State private var xAntibodyFilter: Bool
     @State private var levelFilter: String
     @State private var fieldsFilterText: String
 
@@ -21,96 +24,150 @@ struct DigimonListView: View {
     init(viewModel: DigimonListViewModel, container: AppContainer) {
         _viewModel = StateObject(wrappedValue: viewModel)
         _nameFilter = State(initialValue: viewModel.searchCriteria.name)
+        _exactFilter = State(initialValue: viewModel.searchCriteria.exact)
         _typeFilter = State(initialValue: viewModel.searchCriteria.type)
         _attributeFilter = State(initialValue: viewModel.searchCriteria.attribute)
+        _xAntibodyFilter = State(initialValue: viewModel.searchCriteria.xAntibody)
         _levelFilter = State(initialValue: viewModel.searchCriteria.level)
         _fieldsFilterText = State(initialValue: viewModel.searchCriteria.fields.joined(separator: ", "))
         self.container = container
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            filterHeader
-            if isFilterExpanded {
-                filterPanel
-            }
-            content
-        }
+        content
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
                     if viewModel.isLoadingInitial {
                         ProgressView()
                     }
+
+                    Button {
+                        isFilterSheetPresented = true
+                    } label: {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                                .font(.system(size: 18, weight: .regular))
+                                .foregroundStyle(.primary)
+                                .frame(width: 36, height: 28, alignment: .leading)
+
+                            // Keep badge inside the toolbar item frame to avoid clipping.
+                            // For 99+ values, clamp text to keep width predictable.
+                            let badgeText = appliedFilterCount > 99 ? "99+" : "\(appliedFilterCount)"
+
+                            if appliedFilterCount > 0 {
+                                Text(badgeText)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.red)
+                                    .clipShape(Capsule())
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(Color.white, lineWidth: 1)
+                                    )
+                                    .padding(.trailing, 2)
+                                    .padding(.top, 0)
+                            }
+                        }
+                        .frame(width: 40, height: 28)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open filters")
                 }
+            }
+            .sheet(isPresented: $isFilterSheetPresented) {
+                filterSheet
             }
             .task {
                 await viewModel.loadInitialIfNeeded()
             }
     }
 
-    private var filterHeader: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isFilterExpanded.toggle()
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-                Text("Search Filters")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                if appliedFilterCount > 0 {
-                    Text("\(appliedFilterCount)")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.15))
-                        .clipShape(Capsule())
+    private var filterSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Digimon") {
+                    TextField("Name (e.g. Agumon)", text: $nameFilter)
+                    Toggle("Exact name match", isOn: $exactFilter)
+                    Toggle("X-Antibody", isOn: $xAntibodyFilter)
                 }
-                Image(systemName: isFilterExpanded ? "chevron.up" : "chevron.down")
-                    .font(.footnote.weight(.semibold))
+
+                Section("Type") {
+                    TextField("Type (e.g. Reptile)", text: $typeFilter)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    suggestionChips(options: suggestedTypes, onTap: { typeFilter = $0 })
+                }
+
+                Section("Attribute") {
+                    TextField("Attribute (e.g. Vaccine)", text: $attributeFilter)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    suggestionChips(options: suggestedAttributes, onTap: { attributeFilter = $0 })
+                }
+
+                Section("Level") {
+                    TextField("Level (e.g. Child)", text: $levelFilter)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    suggestionChips(options: suggestedLevels, onTap: { levelFilter = $0 })
+                }
+
+                Section("Fields") {
+                    TextField("Fields (comma separated)", text: $fieldsFilterText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    multiSelectChips(options: suggestedFields)
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .navigationTitle("Search Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Clear") {
+                        clearDraftFilters()
+                    }
+                    .disabled(isApplyingFilters)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        applyFiltersFromSheet()
+                    } label: {
+                        if isApplyingFilters {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Applying...")
+                            }
+                        } else {
+                            Text("Apply")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .disabled(isApplyingFilters)
+                }
+            }
+            .interactiveDismissDisabled(isApplyingFilters)
+            .task {
+                await viewModel.loadFilterOptionsIfNeeded()
+            }
         }
-        .buttonStyle(.plain)
-        .background(Color(.secondarySystemBackground))
     }
 
-    private var filterPanel: some View {
-        VStack(spacing: 10) {
-            Group {
-                TextField("Name (e.g. Agumon)", text: $nameFilter)
-                TextField("Type (e.g. Reptile)", text: $typeFilter)
-                TextField("Attribute (e.g. Vaccine)", text: $attributeFilter)
-                TextField("Level (e.g. Child)", text: $levelFilter)
-                TextField("Fields (comma separated)", text: $fieldsFilterText)
-            }
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .textFieldStyle(.roundedBorder)
+    private func applyFiltersFromSheet() {
+        guard !isApplyingFilters else { return }
 
-            HStack(spacing: 10) {
-                Button("Clear") {
-                    clearDraftFilters()
-                    Task {
-                        await viewModel.applySearchCriteria(.empty)
-                    }
-                }
-                .buttonStyle(.bordered)
+        isApplyingFilters = true
+        let criteria = buildCriteriaFromDraft()
 
-                Button("Apply Filters") {
-                    Task {
-                        await viewModel.applySearchCriteria(buildCriteriaFromDraft())
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+        Task {
+            await viewModel.applySearchCriteria(criteria)
+            isApplyingFilters = false
+            isFilterSheetPresented = false
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
-        .background(Color(.secondarySystemBackground))
     }
 
     @ViewBuilder
@@ -173,8 +230,9 @@ struct DigimonListView: View {
         .padding()
     }
 
+    @ViewBuilder
     private var listView: some View {
-        ScrollView {
+        let scrollContent = ScrollView {
             LazyVStack(spacing: 12) {
                 if let paginationError = viewModel.paginationErrorMessage {
                     HStack(alignment: .top, spacing: 10) {
@@ -245,7 +303,8 @@ struct DigimonListView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .refreshable {
+
+        scrollContent.refreshable {
             await viewModel.refresh()
         }
     }
@@ -253,8 +312,10 @@ struct DigimonListView: View {
     private var appliedFilterCount: Int {
         var count = 0
         if !viewModel.searchCriteria.name.isEmpty { count += 1 }
+        if viewModel.searchCriteria.exact { count += 1 }
         if !viewModel.searchCriteria.type.isEmpty { count += 1 }
         if !viewModel.searchCriteria.attribute.isEmpty { count += 1 }
+        if viewModel.searchCriteria.xAntibody { count += 1 }
         if !viewModel.searchCriteria.level.isEmpty { count += 1 }
         if !viewModel.searchCriteria.fields.isEmpty { count += 1 }
         return count
@@ -263,8 +324,10 @@ struct DigimonListView: View {
     private func buildCriteriaFromDraft() -> DigimonSearchCriteria {
         DigimonSearchCriteria(
             name: nameFilter.trimmingCharacters(in: .whitespacesAndNewlines),
+            exact: exactFilter,
             type: typeFilter.trimmingCharacters(in: .whitespacesAndNewlines),
             attribute: attributeFilter.trimmingCharacters(in: .whitespacesAndNewlines),
+            xAntibody: xAntibodyFilter,
             level: levelFilter.trimmingCharacters(in: .whitespacesAndNewlines),
             fields: fieldsFilterText
                 .split(separator: ",")
@@ -275,10 +338,131 @@ struct DigimonListView: View {
 
     private func clearDraftFilters() {
         nameFilter = ""
+        exactFilter = false
         typeFilter = ""
         attributeFilter = ""
+        xAntibodyFilter = false
         levelFilter = ""
         fieldsFilterText = ""
+    }
+
+    private var selectedFieldSet: Set<String> {
+        Set(
+            fieldsFilterText
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private var suggestedTypes: [String] {
+        filteredOptions(from: viewModel.filterOptions.types, query: typeFilter)
+    }
+
+    private var suggestedAttributes: [String] {
+        filteredOptions(from: viewModel.filterOptions.attributes, query: attributeFilter)
+    }
+
+    private var suggestedLevels: [String] {
+        filteredOptions(from: viewModel.filterOptions.levels, query: levelFilter)
+    }
+
+    private var suggestedFields: [String] {
+        let query = fieldsFilterText.components(separatedBy: ",").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return filteredOptions(from: viewModel.filterOptions.fields, query: query)
+    }
+
+    private func filteredOptions(from options: [String], query: String) -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return Array(options.prefix(8))
+        }
+        return Array(
+            options
+                .filter { $0.lowercased().contains(trimmed.lowercased()) }
+                .prefix(8)
+        )
+    }
+
+    @ViewBuilder
+    private func suggestionChips(options: [String], onTap: @escaping (String) -> Void) -> some View {
+        if !options.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                        Button(option) {
+                            onTap(option)
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func multiSelectChips(options: [String]) -> some View {
+        if !options.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                        let isSelected = selectedFieldSet.contains(option)
+                        Button(option) {
+                            handleFieldChipTap(option)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(isSelected ? .accentColor : .secondary)
+                        .font(.caption)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func toggleField(_ field: String) {
+        var values = selectedFieldSet
+        if values.contains(field) {
+            values.remove(field)
+        } else {
+            values.insert(field)
+        }
+        fieldsFilterText = values.sorted().joined(separator: ", ")
+    }
+
+    private func handleFieldChipTap(_ field: String) {
+        let tokens = fieldsFilterText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var values = Set(tokens)
+        let trailingToken = fieldsFilterText
+            .components(separatedBy: ",")
+            .last?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        let isTrailingPartial = !trailingToken.isEmpty
+            && trailingToken.caseInsensitiveCompare(field) != .orderedSame
+            && field.lowercased().contains(trailingToken.lowercased())
+            && !values.contains(field)
+
+        if isTrailingPartial {
+            values.remove(trailingToken)
+        }
+
+        toggleFieldInSet(field, values: &values)
+        fieldsFilterText = values.sorted().joined(separator: ", ")
+    }
+
+    private func toggleFieldInSet(_ field: String, values: inout Set<String>) {
+        if values.contains(field) {
+            values.remove(field)
+        } else {
+            values.insert(field)
+        }
     }
 }
 

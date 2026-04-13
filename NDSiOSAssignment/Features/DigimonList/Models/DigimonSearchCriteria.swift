@@ -9,8 +9,10 @@ import Foundation
 
 struct DigimonSearchCriteria: Equatable {
     var name: String = ""
+    var exact: Bool = false
     var type: String = ""
     var attribute: String = ""
+    var xAntibody: Bool = false
     var level: String = ""
     var fields: [String] = []
 

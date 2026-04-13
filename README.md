@@ -21,6 +21,33 @@ The app is built with SwiftUI and follows an MVVM-style structure with a small r
 - MVVM
 - Repository pattern
 
+## API Search Strategy
+
+To keep the implementation aligned with the Digi API docs while still covering assignment search needs:
+
+- List search uses documented `GET /digimon` query params directly:
+	- `name`
+	- `exact`
+	- `attribute`
+	- `xAntibody`
+	- `level`
+	- `page`
+	- `pageSize`
+
+- `type` and `fields` are handled as enrichment filters:
+	- First, fetch paged list results from `GET /digimon`.
+	- Then, fetch detail data (`GET /digimon/{id}`) for those candidates.
+	- Apply `type` and `fields` matching from detail metadata.
+
+Reason:
+
+The docs for `GET /digimon` do not expose `type` and `fields` as list query params, but the assignment requires those search dimensions. This approach keeps list requests doc-compliant and still satisfies the assignment feature scope.
+
+Practical impact:
+
+- For `type`/`fields` searches, one visible batch of 8 cards may require scanning multiple API pages in the background.
+- Infinite scroll still displays results in batches of 8.
+
 ## Project Structure
 
 - `App/` - app entry point and dependency container

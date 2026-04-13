@@ -15,4 +15,8 @@ protocol DigimonRepository {
     ) async throws -> DigimonPage
 
     func fetchDigimonDetail(id: Int) async throws -> DigimonDetail
+
+    func fetchDigimonDetail(name: String) async throws -> DigimonDetail
+
+    func fetchFilterOptions() async throws -> DigimonFilterOptions
 }
